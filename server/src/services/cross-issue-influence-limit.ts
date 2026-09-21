@@ -1,6 +1,6 @@
-import { and, count, eq } from "drizzle-orm";
+import { and, count, desc, eq, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -109,8 +109,35 @@ export async function observeCrossIssueInfluence(
       throw crossIssueInfluenceRunContextError();
     }
 
-    const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
-    if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
+    let sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
+    if (!sourceIssueId) {
+      // A timer heartbeat run starts without issue context. The issue it has
+      // actively checked out or is executing is its legitimate source issue
+      // (same ownership rule as status cards): writes there are same-issue,
+      // writes elsewhere count against the per-run cross-issue cap.
+      const boundIssues = await tx
+        .select({ id: issues.id, identifier: issues.identifier })
+        .from(issues)
+        .where(and(
+          eq(issues.companyId, input.companyId),
+          or(
+            eq(issues.checkoutRunId, input.runId),
+            eq(issues.executionRunId, input.runId),
+          ),
+        ))
+        .orderBy(desc(issues.executionLockedAt), desc(issues.updatedAt));
+      if (boundIssues.length === 0) throw crossIssueInfluenceRunContextError();
+      const targetIsBound = boundIssues.some((row) =>
+        row.id === input.targetIssueId ||
+        Boolean(
+          input.targetIssueIdentifier &&
+          row.identifier &&
+          row.identifier.toUpperCase() === input.targetIssueIdentifier.toUpperCase(),
+        )
+      );
+      if (targetIsBound) return null;
+      sourceIssueId = boundIssues[0].id;
+    }
     if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
