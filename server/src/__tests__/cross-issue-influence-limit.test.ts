@@ -187,7 +187,22 @@ describe("cross-issue influence limit rollout", () => {
     expect(fake.inserted).toEqual([]);
   });
 
-  it("exempts identifier-addressed writes when the target identifier matches the run's checkout", async () => {
+  it("exempts identifier-addressed writes when both ID and identifier match the run's checkout", async () => {
+    const fake = counterDb(0, { contextSnapshot: {} }, [
+      { id: "66666666-6666-4666-8666-666666666666", identifier: "WOB-10" },
+    ]);
+    await expect(observeCrossIssueInfluence(fake.db as never, {
+      companyId: "22222222-2222-4222-8222-222222222222",
+      runId: "11111111-1111-4111-8111-111111111111",
+      agentId: "33333333-3333-4333-8333-333333333333",
+      targetIssueId: "66666666-6666-4666-8666-666666666666",
+      targetIssueIdentifier: "wob-10",
+      kind: "update",
+    })).resolves.toBeNull();
+    expect(fake.inserted).toEqual([]);
+  });
+
+  it("does not exempt a write when target identifier matches checkout but target ID is different", async () => {
     const fake = counterDb(0, { contextSnapshot: {} }, [
       { id: "66666666-6666-4666-8666-666666666666", identifier: "WOB-10" },
     ]);
@@ -198,8 +213,16 @@ describe("cross-issue influence limit rollout", () => {
       targetIssueId: "55555555-5555-4555-8555-555555555555",
       targetIssueIdentifier: "wob-10",
       kind: "update",
-    })).resolves.toBeNull();
-    expect(fake.inserted).toEqual([]);
+      now: new Date(CROSS_ISSUE_INFLUENCE_ENFORCE_AT.getTime() - 1),
+    })).resolves.toMatchObject({ count: 1, allowed: true });
+    expect(fake.inserted).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({
+          sourceIssueId: "66666666-6666-4666-8666-666666666666",
+          targetIssueId: "55555555-5555-4555-8555-555555555555",
+        }),
+      }),
+    ]);
   });
 
   it("derives the cross-issue source from the run's active checkout when the snapshot is empty", async () => {

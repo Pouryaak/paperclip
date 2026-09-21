@@ -132,18 +132,17 @@ export async function observeCrossIssueInfluence(
           ))
           .orderBy(desc(issues.executionLockedAt), desc(issues.updatedAt));
       if (boundIssues.length === 0) throw crossIssueInfluenceRunContextError();
-      const targetIsBound = boundIssues.some((row) =>
-        row.id === input.targetIssueId ||
-        Boolean(
-          input.targetIssueIdentifier &&
-          row.identifier &&
-          row.identifier.toUpperCase() === input.targetIssueIdentifier.toUpperCase(),
-        )
-      );
-      if (targetIsBound) return null;
+      const matchingBound = boundIssues.find((row) => row.id === input.targetIssueId);
+      if (
+        matchingBound &&
+        (!input.targetIssueIdentifier ||
+          !matchingBound.identifier ||
+          matchingBound.identifier.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
+      ) {
+        return null;
+      }
       sourceIssueId = boundIssues[0].id;
-    }
-    if (
+    } else if (
       sourceIssueId === input.targetIssueId ||
       (input.targetIssueIdentifier && sourceIssueId.toUpperCase() === input.targetIssueIdentifier.toUpperCase())
     ) {

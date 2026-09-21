@@ -197,6 +197,77 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
     });
   });
 
+  it("does not exempt a write when caller-supplied identifier matches bound issue but target ID differs", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const runId = randomUUID();
+    const checkedOutIssueId = randomUUID();
+    const otherIssueId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `C${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      defaultResponsibleUserId: "board-user",
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Timer Foreman",
+      role: "engineer",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    await db.insert(heartbeatRuns).values({
+      id: runId,
+      companyId,
+      agentId,
+      status: "running",
+      responsibleUserId: "board-user",
+      contextSnapshot: {},
+    });
+    await db.insert(issues).values([
+      {
+        id: checkedOutIssueId,
+        companyId,
+        title: "Checked-out issue",
+        identifier: "CAP-10",
+        checkoutRunId: runId,
+        executionLockedAt: new Date(),
+      },
+      {
+        id: otherIssueId,
+        companyId,
+        title: "Unrelated issue",
+        identifier: "CAP-11",
+      },
+    ]);
+
+    // Caller provides targetIssueId of unrelated issue, but targetIssueIdentifier of the bound issue.
+    // Must NOT be exempt; must count against the limit.
+    await expect(observeCrossIssueInfluence(db, {
+      companyId,
+      runId,
+      agentId,
+      targetIssueId: otherIssueId,
+      targetIssueIdentifier: "CAP-10",
+      kind: "comment",
+      now: CROSS_ISSUE_INFLUENCE_ENFORCE_AT,
+    })).resolves.toMatchObject({ allowed: true, count: 1, mode: "enforce" });
+
+    const recorded = await db
+      .select({ details: activityLog.details })
+      .from(activityLog)
+      .where(and(eq(activityLog.companyId, companyId), eq(activityLog.runId, runId)));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.details).toMatchObject({
+      sourceIssueId: checkedOutIssueId,
+      targetIssueId: otherIssueId,
+    });
+  });
+
   it("does not exempt a stale terminal binding while a current binding exists", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
